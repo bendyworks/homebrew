@@ -1,4 +1,4 @@
-require 'brewkit'
+require 'formula'
 
 class ObjectiveCaml <Formula
   @url='http://caml.inria.fr/pub/distrib/ocaml-3.11/ocaml-3.11.1.tar.bz2'
@@ -8,6 +8,8 @@ class ObjectiveCaml <Formula
   def install
     system "./configure --prefix #{prefix}"
     system "make world"
+    # 'world' can be built in parallel, but the other targets have problems
+    ENV.deparallelize
     system "make opt"
     system "make opt.opt"
     system "make install"

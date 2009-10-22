@@ -1,40 +1,60 @@
 #!/usr/bin/ruby
 # -*- coding: utf-8 -*-
-ENV['RUBYLIB']=HOMEBREW_RUBYLIB=File.expand_path(__FILE__+'/../../Library/Homebrew')
-$:.unshift HOMEBREW_RUBYLIB
-require 'global'
-require 'brew.h'
 
-if %w[/ /usr].include? HOMEBREW_PREFIX.to_s then abort <<-EOS
-  You have placed Homebrew at the prefix: #{HOMEBREW_PREFIX}
-  This is not currently supported. Voice your support for this feature at:
-  #{HOMEBREW_WWW}
-  EOS
+def homebrew_rubylib_path
+  lib_path = "/../../Library/Homebrew"
+  # we resolve off of Dir.getwd as otherwise the symlink gets resolved!
+  brew_path = if not File.symlink? __FILE__ or File.exist? Dir.getwd+'/'+__FILE__+lib_path
+    # standard 100% symlinked or non-symlinked installation
+    __FILE__
+  else
+    # non-standard installation -- just this script is symlinked
+    File.readlink(__FILE__)
+  end
+  return File.expand_path(brew_path+lib_path)
 end
 
-# remove MacPorts and Fink from the PATH, this prevents issues like:
-# http://github.com/mxcl/homebrew/issues/#issue/13
-# http://github.com/mxcl/homebrew/issues/#issue/48
-fix_PATH
+$:.unshift homebrew_rubylib_path
+require 'global'
 
+case ARGV.first
+when '--cache'
+  puts HOMEBREW_CACHE
+  exit 0
+when '-h', '--help', '--usage', '-?' 
+  puts ARGV.usage
+  exit 0
+when '--version'
+  puts HOMEBREW_VERSION
+  exit 0
+when '-v'
+  if ARGV.length > 1
+    puts "Homebrew #{HOMEBREW_VERSION}"
+    # continue in verbose mode
+    ARGV << ARGV.shift
+  else
+    puts HOMEBREW_VERSION
+    exit 0
+  end
+end
+
+case HOMEBREW_PREFIX.to_s when '/', '/usr'
+  # it may work, but I only see pain this route and don't want to support it
+  abort "Cowardly refusing to continue at this prefix: #{HOMEBREW_PREFIX}"
+end
 if MACOS_VERSION < 10.5
-  onoe "Homebrew currently requires Leopard or higher"
-  abort "Sorry about that, but thanks for your interest anyway!"
+  abort "Homebrew requires Leopard or higher, but you could fork it and fix that..."
 end
 case Hardware.cpu_type when :ppc, :dunno
   abort "Sorry, Homebrew does not support your computer's CPU architecture."
 end
-unless system "/usr/bin/which -s gcc-4.2"
-  abort "Sorry, Homebrew requires gcc 4.2, which is provided by Xcode 3.1"
-end
-
 
 begin
+  require 'brew.h'
+
   case ARGV.shift
-    when '--prefix' then puts HOMEBREW_PREFIX
-    when '--cache' then puts HOMEBREW_CACHE
-    when '-h', '--help', '--usage', '-?' then puts ARGV.usage
-    when '-v', '--version' then puts HOMEBREW_VERSION
+  when '--prefix'
+    puts HOMEBREW_PREFIX
 
     when 'home', 'homepage'
       if ARGV.named_empty?
@@ -44,9 +64,14 @@ begin
       end
 
     when 'ls', 'list'
-      if ARGV.named_empty?
+      if ARGV.flag? '--unbrewed'
+        dirs = HOMEBREW_PREFIX.children.select { |pn| pn.directory? }.collect { |pn| pn.basename.to_s }
+        dirs -= ['Library', 'Cellar', '.git']
+        Dir.chdir HOMEBREW_PREFIX
+        exec 'find', *dirs + %w[-type f ( ! -iname .ds_store ! -iname brew )]
+      elsif ARGV.named_empty?
         ENV['CLICOLOR']=nil
-        exec 'ls', *ARGV.options<<HOMEBREW_CELLAR
+        exec 'ls', *ARGV.options<<HOMEBREW_CELLAR if HOMEBREW_CELLAR.exist?
       elsif ARGV.verbose? or not $stdout.tty?
         exec "find", *ARGV.kegs+%w[-not -type d -print]
       else
@@ -55,7 +80,11 @@ begin
 
     when 'search', '-S'
       formulae = (HOMEBREW_PREFIX+'Library'+'Formula').children.sort.map{|f| f.basename('.rb') }
-      puts_columns formulae.grep(Regexp.new(ARGV.first || ''))
+      if ARGV.first =~ /^\/(.*)\/$/
+        puts_columns formulae.grep(Regexp.new($1))
+      else
+        puts_columns formulae.grep(/.*#{ARGV.first}.*/)
+      end
 
     when 'edit'
       if ARGV.named_empty?
@@ -77,15 +106,6 @@ begin
       
       raise "Cannot write to #{HOMEBREW_PREFIX}" unless HOMEBREW_PREFIX.writable?
 
-      require 'brewkit'
-
-      if ARGV.verbose?
-        ohai "Build Environment"
-        %w[CFLAGS LDFLAGS CPPFLAGS MAKEFLAGS CC CXX MACOSX_DEPLOYMENT_TARGET].each do |f|
-          puts "#{f}: #{ENV[f]}" unless ENV[f].to_s.empty?
-        end
-      end
-      
       if ARGV.interactive? and ARGV.formulae.length > 1
         # the reason for this is interactive mode is a little tricky to do 
         # with more than one formula, AND I can't think of a time where you'd
@@ -95,10 +115,9 @@ begin
         raise "Interactive mode can only be used with one formula argument"
       end
 
+      warn_about_macports_or_fink # keep warning before dependency resolution
+
       unless ARGV.force?
-        unless system "/usr/bin/which -s #{ENV.cc}"
-          raise "We cannot find a c compiler, have you installed the latest Xcode?"
-        end
         formulae = ARGV.formulae.reject do |f|
           if f.installed?
             message = "Formula already installed: #{f.prefix}"
@@ -119,6 +138,11 @@ begin
         deps = []
         formulae.each { |f| deps += expand_deps f }
         formulae = deps.reject { |f| f.installed? }
+      
+        if formulae.length > 1 and ARGV.interactive?
+          # because current code is a mess
+          raise "Please install the formula's dependencies before entering interactive mode"
+        end
       end
 
       require 'set'
@@ -137,7 +161,7 @@ begin
           #    to make the formula script the executed script
           pid=fork
           if pid.nil?
-            exec 'ruby', '-r', "#{HOMEBREW_RUBYLIB}/install", f.path, '--', *ARGV.options
+            exec '/usr/bin/ruby', '-I', homebrew_rubylib_path, '-rinstall', f.path, '--', *ARGV.options
           else
             Process.wait pid
           end
@@ -154,7 +178,7 @@ begin
       unless updater.update_from_masterbrew!
         puts "Already up-to-date."
       else
-        puts "Updated Homebrew from #{old_revision} to #{updater.current_revision}."
+        puts "Updated Homebrew from #{old_revision[0,8]} to #{updater.current_revision[0,8]}."
         if updater.pending_formulae_changes?
           ohai "The following formulae were updated:"
           puts_columns updater.updated_formulae
@@ -190,7 +214,7 @@ begin
       if ARGV.include? '--macports'
         exec "open", "http://www.macports.org/ports.php?by=name&substr=#{ARGV.next}"
       else
-        exec_editor *ARGV.collect {|name| make name}
+        exec_editor *ARGV.named.collect {|name| make name}
       end
 
     when 'diy', 'configure'

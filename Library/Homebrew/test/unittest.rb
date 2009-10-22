@@ -5,8 +5,10 @@
 
 ABS__FILE__=File.expand_path(__FILE__)
 
-$:.unshift File.dirname(ABS__FILE__)
-require 'pathname+yeast'
+$:.unshift File.dirname(ABS__FILE__)+'/..'
+require 'extend/pathname'
+require 'utils'
+require 'hardware'
 require 'formula'
 require 'download_strategy'
 require 'keg'
@@ -18,6 +20,7 @@ require 'update'
 # these are defined in global.rb, but we don't want to break our actual
 # homebrew tree, and we do want to test everything :)
 HOMEBREW_PREFIX=Pathname.new '/private/tmp/testbrew/prefix'
+HOMEBREW_REPOSITORY=HOMEBREW_PREFIX
 HOMEBREW_CACHE=HOMEBREW_PREFIX.parent+"cache"
 HOMEBREW_CELLAR=HOMEBREW_PREFIX.parent+"cellar"
 HOMEBREW_USER_AGENT="Homebrew"
@@ -28,24 +31,28 @@ Dir.chdir HOMEBREW_PREFIX
 at_exit { HOMEBREW_PREFIX.parent.rmtree }
 
 require 'test/unit' # must be after at_exit
-require 'ARGV+yeast' # needs to be after test/unit to avoid conflict with OptionsParser
+require 'extend/ARGV' # needs to be after test/unit to avoid conflict with OptionsParser
+ARGV.extend(HomebrewArgvExtension)
 
 
 class MockFormula <Formula
   def initialize url
     @url=url
+    @homepage = 'http://example.com/'
     super 'test'
   end
 end
 
 class MostlyAbstractFormula <Formula
   @url=''
+  @homepage = 'http://example.com/'
 end
 
 class TestBall <Formula
   # name parameter required for some Formula::factory
   def initialize name=nil
     @url="file:///#{Pathname.new(ABS__FILE__).parent.realpath}/testball-0.1.tbz"
+    @homepage = 'http://example.com/'
     super "testball"
   end
   def install
@@ -59,6 +66,7 @@ class TestZip <Formula
     zip=HOMEBREW_CACHE.parent+'test-0.1.zip'
     Kernel.system '/usr/bin/zip', '-0', zip, ABS__FILE__
     @url="file://#{zip}"
+    @homepage = 'http://example.com/'
     super 'testzip'
   end
 end
@@ -80,8 +88,9 @@ class TestScriptFileFormula <ScriptFileFormula
   version "1"
   
   def initialize
-    super
     @name='test-script-formula'
+    @homepage = 'http://example.com/'
+    super
   end
 end
 
@@ -101,7 +110,7 @@ class RefreshBrewMock < RefreshBrew
   end
   
   def expectations_met?
-    @expect.keys == @called
+    @expect.keys.sort == @called.sort
   end
   
   def inspect
@@ -129,7 +138,7 @@ module ExtendArgvPlusYeast
     @named=nil
     @formulae=nil
     @kegs=nil
-    while ARGV.count > 0
+    while ARGV.length > 0
       ARGV.shift
     end
   end
@@ -357,7 +366,18 @@ class BeerTasting <Test::Unit::TestCase
 
     path=HOMEBREW_PREFIX+'Library'+'Formula'+"#{FOOBAR}.rb"
     path.dirname.mkpath
-    `echo "require 'brewkit'; class #{classname} <Formula; @url=''; end" > #{path}`
+    File.open(path, 'w') do |f|
+      f << %{
+        require 'formula'
+        class #{classname} < Formula
+          @url=''
+          def initialize(*args)
+            @homepage = 'http://example.com/'
+            super
+          end
+        end
+      }
+    end
     
     assert_not_nil Formula.factory(FOOBAR)
   end
@@ -456,10 +476,10 @@ class BeerTasting <Test::Unit::TestCase
   def test_arch_for_command
     arches=arch_for_command '/usr/bin/svn'
     if `sw_vers -productVersion` =~ /10\.(\d+)/ and $1.to_i >= 6
-      assert_equal 3, arches.count
+      assert_equal 3, arches.length
       assert arches.include?(:x86_64)
     else
-      assert_equal 2, arches.count
+      assert_equal 2, arches.length
     end
     assert arches.include?(:i386)
     assert arches.include?(:ppc7400)
@@ -533,6 +553,7 @@ class BeerTasting <Test::Unit::TestCase
       assert_equal false, updater.update_from_masterbrew!
       assert updater.expectations_met?
       assert updater.updated_formulae.empty?
+      assert updater.added_formulae.empty?
     end
   end
   
@@ -546,6 +567,7 @@ class BeerTasting <Test::Unit::TestCase
       assert_equal true, updater.update_from_masterbrew!
       assert !updater.pending_formulae_changes?
       assert updater.updated_formulae.empty?
+      assert updater.added_formulae.empty?
     end
   end
   
@@ -558,7 +580,8 @@ class BeerTasting <Test::Unit::TestCase
       
       assert_equal true, updater.update_from_masterbrew!
       assert updater.pending_formulae_changes?
-      assert_equal %w{ antiword bash-completion xar yajl }, updater.updated_formulae
+      assert_equal %w{ xar yajl }, updater.updated_formulae
+      assert_equal %w{ antiword bash-completion ddrescue dict lua }, updater.added_formulae
     end
   end
   
@@ -568,6 +591,16 @@ class BeerTasting <Test::Unit::TestCase
       updater.in_prefix_expect('git log -l -1 --pretty=format:%H', 'the-revision-hash')
       assert_equal 'the-revision-hash', updater.current_revision
     end
+  end
+  
+  def test_class_names
+    assert_equal 'ShellFm', Formula.class_s('shell.fm')
+    assert_equal 'Fooxx', Formula.class_s('foo++')
+  end
+      
+  def test_angband_version_style
+    f = MockFormula.new 'http://rephial.org/downloads/3.0/angband-3.0.9b-src.tar.gz'
+    assert_equal '3.0.9b', f.version
   end
   
   private
@@ -588,11 +621,24 @@ class BeerTasting <Test::Unit::TestCase
     end
     @fixture_data
   end
+
+  def test_ENV_options
+    ENV.gcc_4_0_1
+    ENV.gcc_4_2
+    ENV.O3
+    ENV.minimal_optimization
+    ENV.no_optimization
+    ENV.libxml2
+    ENV.x11
+    ENV.enable_warnings
+    assert !ENV.cc.empty?
+    assert !ENV.cxx.empty?
+  end
 end
 
 __END__
 update_git_pull_output_without_formulae_changes: |
-  remote: Counting objects: 58, done.
+  remote: counting objects: 58, done.
   remote: Compressing objects: 100% (35/35), done.
   remote: Total 39 (delta 20), reused 0 (delta 0)
   Unpacking objects: 100% (39/39), done.
@@ -612,7 +658,7 @@ update_git_pull_output_without_formulae_changes: |
    delete mode 100644 Library/Homebrew/hw.model.c
    delete mode 100644 Library/Homebrew/hw.model.rb
 update_git_pull_output_with_formulae_changes: |
-  remote: Counting objects: 58, done.
+  remote: counting objects: 58, done.
   remote: Compressing objects: 100% (35/35), done.
   remote: Total 39 (delta 20), reused 0 (delta 0)
   Unpacking objects: 100% (39/39), done.

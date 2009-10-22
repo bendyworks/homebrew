@@ -21,10 +21,13 @@
 #  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 #  THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-require 'pathname+yeast'
-require 'ARGV+yeast'
+require 'extend/pathname'
+require 'extend/ARGV'
 require 'utils'
 require 'hardware'
+
+ARGV.extend(HomebrewArgvExtension)
+
 
 if Process.uid == 0
   # technically this is not the correct place, this cache is for *all users*
@@ -38,6 +41,10 @@ HOMEBREW_PREFIX = (Pathname.getwd+__FILE__).dirname.parent.parent.cleanpath
 HOMEBREW_CELLAR = HOMEBREW_PREFIX+'Cellar'
 HOMEBREW_VERSION = 0.4
 HOMEBREW_WWW = 'http://bit.ly/Homebrew'
+
+# we use Library as we allow people to symlink their Homebrew into another
+# directory so they can hack in one place and use it in another
+HOMEBREW_REPOSITORY = (HOMEBREW_PREFIX+'Library').realpath.parent
 
 MACOS_FULL_VERSION = `/usr/bin/sw_vers -productVersion`.chomp
 MACOS_VERSION = /(10\.\d+)(\.\d+)?/.match(MACOS_FULL_VERSION).captures.first.to_f

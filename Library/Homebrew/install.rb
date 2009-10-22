@@ -1,17 +1,26 @@
 #!/usr/bin/ruby
 require 'global'
-require 'formula'
-require 'keg'
+
 require 'brew.h'
+require 'extend/ENV'
+require 'fileutils'
+require 'formula'
+require 'hardware'
+require 'keg'
 
 show_summary_heading = false
 
 def text_for_keg_only_formula f
+  if f.keg_only? == :provided_by_osx
+    rationale = "This because the formula is already provided by OS X."
+  elsif f.keg_only?.kind_of? String
+    rationale = "The formula provides the following rationale:\n\n#{f.keg_only?.chomp}"
+  else
+    rationale = "The formula didn't provide any rationale for this."
+  end
   <<-EOS
 #{f.name} is keg-only. This means it is not symlinked into Homebrew's
-prefix. The formula provides the following rationale:
-
-#{f.keg_only?.chomp}
+prefix. #{rationale}
 
 Generally there are no consequences of this for you, however if you build your
 own software and it requires this formula, you may want to run this command to
@@ -22,22 +31,25 @@ EOS
 end
 
 
-def ENV_append key, value, separator = ' '
-  if ENV[key] and not ENV[key].empty?
-    ENV[key] += separator+value
-  else
-    ENV[key] = value
-  end
-end
-
-
 def install f
+  # we deliberately only do this when install is run, although it may be the wrong decision…
+  ENV.extend(HomebrewEnvExtension)
+  ENV.setup_build_environment
+  
   f.deps.each do |dep|
     dep = Formula.factory dep
     if dep.keg_only?
-      ENV_append 'LDFLAGS', "-L#{dep.lib}"
-      ENV_append 'CPPFLAGS', "-I#{dep.include}"
-      ENV_append 'PATH', "#{dep.bin}", ':'
+      ENV.prepend 'LDFLAGS', "-L#{dep.lib}"
+      ENV.prepend 'CPPFLAGS', "-I#{dep.include}"
+      ENV.prepend 'PATH', "#{dep.bin}", ':'
+      ENV.prepend 'PKG_CONFIG_PATH', dep.lib+'pkgconfig', ':'
+    end
+  end
+
+  if ARGV.verbose?
+    ohai "Build Environment"
+    %w[PATH CFLAGS LDFLAGS CPPFLAGS MAKEFLAGS CC CXX MACOSX_DEPLOYMENT_TARGET].each do |env|
+      puts "#{env}: #{ENV[env]}" unless ENV[env].to_s.empty?
     end
   end
 
@@ -57,7 +69,7 @@ def install f
         f.prefix.mkpath
         beginning=Time.now
         f.install
-        %w[README ChangeLog COPYING LICENSE COPYRIGHT AUTHORS].each do |file|
+        FORMULA_META_FILES.each do |file|
           FileUtils.mv "#{file}.txt", file rescue nil
           f.prefix.install file rescue nil
         end

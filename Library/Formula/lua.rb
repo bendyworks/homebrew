@@ -1,4 +1,4 @@
-require 'brewkit'
+require 'formula'
 
 class Lua <Formula
   @url='http://www.lua.org/ftp/lua-5.1.4.tar.gz'
@@ -16,6 +16,7 @@ class Lua <Formula
 
     inreplace 'Makefile', 'man/man1', 'share/man/man1'
     inreplace 'etc/lua.pc', 'man/man1', 'share/man/man1'
+    inreplace 'src/luaconf.h', '/usr/local', HOMEBREW_PREFIX
 
     ENV["CFLAGS"] += " -DLUA_USE_LINUX"
 
