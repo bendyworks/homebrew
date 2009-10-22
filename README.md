@@ -182,6 +182,12 @@ Let this be the last sudo you do for quite some time:
 
     sudo chown -R `whoami`:staff `brew --prefix`
 
+NOTE: Performing the above command *may* break some programs that are already
+installed in /usr/local. One specific example is mysql. Fixing mysql may be
+as simple as:
+
+    sudo chown -R mysql:mysql `brew --prefix`/mysql
+
 I already have a bunch of junk in /usr/local
 --------------------------------------------
 The easiest thing to do is just git clone into /usr/local. The files that are
